@@ -14,7 +14,7 @@ nvidia-smi
 - 具体安装方法不再写，注意配置/etc/docker/daemon.json
 ```shell
 # 自动配置 注意=docker 应该与实际的显卡调用匹配
-sudo nvidia-ctk runtime configure --runtime=nvidia
+sudo nvidia-ctk runtime configure --runtime=docker
 ```
 
 三、运行带vidia的dind容器
@@ -42,6 +42,7 @@ docker run -d \
 
 四、dind中运行需要GPU驱动的容器
 以 docker-obsidian 为例
+- 没有显示器的服务器还要根据[docker-obsidian](https://github.com/linuxserver/docker-obsidian) 设置内核
 
 
 ```yml
