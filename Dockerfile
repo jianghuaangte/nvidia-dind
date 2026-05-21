@@ -1,92 +1,53 @@
-FROM docker.io/nvidia/cuda:13.1.1-runtime-ubuntu24.04
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV DOCKER_TLS_CERTDIR=/certs
+# Supported base images: Ubuntu 24.04, 22.04, 20.04
+ARG DISTRIB_IMAGE=ubuntu
+ARG DISTRIB_RELEASE=24.04
+FROM ${DISTRIB_IMAGE}:${DISTRIB_RELEASE}
+ARG DISTRIB_IMAGE
+ARG DISTRIB_RELEASE
 
-# 基础工具
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && \
-    apt-get install -y \
+LABEL maintainer="https://github.com/ehfd"
+ENV NVIDIA_DRIVER_CAPABILITIES=all
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get clean && apt-get update && apt-get dist-upgrade -y && apt-get install --no-install-recommends -y \
         apt-utils \
         ca-certificates \
         openssh-client \
         curl \
-        wget \
-        neovim \
         iptables \
+        git \
         gnupg \
-        jq && \
-    rm -rf /var/lib/apt/lists/*
+        software-properties-common \
+        supervisor \
+        wget && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/debconf/* /var/log/* /tmp/* /var/tmp/*
 
-# Docker 官方仓库（Compose Plugin 需要）
-RUN mkdir -p /etc/apt/keyrings && \
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-      | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
-    chmod a+r /etc/apt/keyrings/docker.gpg && \
-    echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-      https://download.docker.com/linux/ubuntu \
-      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
-      > /etc/apt/sources.list.d/docker.list
-
-# NVIDIA Container Toolkit
-RUN curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
-      | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg && \
-    curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
-      | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
-      > /etc/apt/sources.list.d/nvidia-container-toolkit.list
-
-# 安装 Docker + Compose + NVIDIA Toolkit
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && \
-    apt-get install -y \
+# NVIDIA Container Toolkit and Docker
+RUN mkdir -pm755 /etc/apt/keyrings && curl -o /etc/apt/keyrings/docker.asc -fsSL "https://download.docker.com/linux/ubuntu/gpg" && chmod a+r /etc/apt/keyrings/docker.asc && \
+    mkdir -pm755 /etc/apt/sources.list.d && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(grep UBUNTU_CODENAME= /etc/os-release | cut -d= -f2 | tr -d '\"') stable" > /etc/apt/sources.list.d/docker.list && \
+    mkdir -pm755 /usr/share/keyrings && curl -fsSL "https://nvidia.github.io/libnvidia-container/gpgkey" | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg && \
+    curl -fsSL "https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list" | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' > /etc/apt/sources.list.d/nvidia-container-toolkit.list && \
+    apt-get update && apt-get install --no-install-recommends -y \
         docker-ce \
         docker-ce-cli \
         containerd.io \
         docker-buildx-plugin \
         docker-compose-plugin \
+        pigz \
+        xz-utils \
         nvidia-container-toolkit && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/debconf/* /var/log/* /tmp/* /var/tmp/* && \
+    nvidia-ctk runtime configure --runtime=docker
 
-# Docker daemon 配置
-RUN mkdir -p /etc/docker && \
-    cat > /etc/docker/daemon.json <<'EOF'
-{
-  "default-runtime": "nvidia",
-  "features": {
-    "buildkit": true
-  },
-  "runtimes": {
-    "nvidia": {
-      "path": "nvidia-container-runtime",
-      "runtimeArgs": []
-    }
-  }
-}
-EOF
-
-# TLS
-RUN mkdir -p /certs /certs/client && \
-    chmod 1777 /certs /certs/client
-
-# DinD 脚本
-ADD https://raw.githubusercontent.com/docker-library/docker/master/modprobe.sh /usr/local/bin/modprobe
-ADD https://raw.githubusercontent.com/docker-library/docker/master/dockerd-entrypoint.sh /usr/local/bin/
-ADD https://raw.githubusercontent.com/docker-library/docker/master/docker-entrypoint.sh /usr/local/bin/
-ADD https://raw.githubusercontent.com/moby/moby/master/hack/dind /usr/local/bin/dind
-
-RUN chmod +x \
-    /usr/local/bin/modprobe \
-    /usr/local/bin/dockerd-entrypoint.sh \
-    /usr/local/bin/docker-entrypoint.sh \
-    /usr/local/bin/dind
+COPY modprobe entrypoint.sh /usr/local/bin/
+RUN chmod -f 755 /usr/local/bin/entrypoint.sh /usr/local/bin/modprobe
+COPY supervisord.conf /etc/supervisord.conf
+RUN chmod -f 755 /etc/supervisord.conf
 
 VOLUME /var/lib/docker
 
-EXPOSE 2375 2376
-
-ENTRYPOINT ["dockerd-entrypoint.sh"]
-
-CMD []
+ENTRYPOINT ["/usr/bin/supervisord"]
